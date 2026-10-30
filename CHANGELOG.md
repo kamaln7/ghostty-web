@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+- Limit OSC 8 hover underlines to the detected link range instead of shared parser markers.
+
 ## [0.4.0](https://github.com/coder/ghostty-web/compare/v0.3.0...v0.4.0) (2025-12-09)
 
 ### Features
