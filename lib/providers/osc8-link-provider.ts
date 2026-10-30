@@ -11,6 +11,7 @@
  */
 
 import type { IBufferRange, ILink, ILinkProvider } from '../types';
+import { isLinkActivation } from './link-activation';
 
 /**
  * OSC 8 Hyperlink Provider
@@ -100,8 +101,8 @@ export class OSC8LinkProvider implements ILinkProvider {
           text: uri,
           range,
           activate: (event) => {
-            // Open link if Ctrl/Cmd is pressed
-            if (event.ctrlKey || event.metaKey) {
+            // Open link on Ctrl/Cmd+click or a touch tap
+            if (isLinkActivation(event)) {
               window.open(uri, '_blank', 'noopener,noreferrer');
             }
           },

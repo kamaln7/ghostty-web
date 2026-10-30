@@ -640,7 +640,7 @@ export interface ILink {
   /** The range of the link in the buffer (may span multiple lines) */
   range: IBufferRange;
 
-  /** Called when the link is activated (clicked with modifier) */
+  /** Called when the link is activated (Ctrl/Cmd+click, or a touch tap delivered as a `pointerup` PointerEvent with `pointerType === 'touch'`) */
   activate(event: MouseEvent): void;
 
   /** Optional: called when mouse enters/leaves the link */

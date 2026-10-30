@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Open OSC 8 and plain-text links with a single-finger touch tap, while preserving Ctrl/Cmd-click for mouse input.
+
 ## [0.4.0](https://github.com/coder/ghostty-web/compare/v0.3.0...v0.4.0) (2025-12-09)
 
 ### Features
