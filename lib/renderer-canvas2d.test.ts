@@ -13,7 +13,7 @@ import { CanvasRenderer } from './renderer-canvas2d';
 import { DEFAULT_THEME } from './renderer-core';
 import type { IRenderable } from './renderer-types';
 import type { GhosttyCell, KittyImagePixels, KittyPlacementInfo } from './types';
-import { KittyImageFormat } from './types';
+import { CellFlags, KittyImageFormat } from './types';
 
 describe('CanvasRenderer', () => {
   describe('Default Theme', () => {
@@ -674,4 +674,124 @@ test('Canvas2D does not draw missing-glyph boxes while an image placement is una
   r.renderCellText(cell, 0, 0);
   expect(requests).toEqual([]);
   renderer.destroy();
+});
+
+describe('inverse cell colors (canvas2d)', () => {
+  const CELL_W = 10;
+  const CELL_H = 20;
+
+  function makeCell(overrides: Partial<GhosttyCell> = {}): GhosttyCell {
+    return {
+      codepoint: 0x41,
+      fg_r: 0,
+      fg_g: 0,
+      fg_b: 0,
+      bg_r: 0,
+      bg_g: 0,
+      bg_b: 0,
+      fgIsDefault: true,
+      bgIsDefault: true,
+      flags: 0,
+      width: 1,
+      hyperlink_id: 0,
+      grapheme_len: 0,
+      grapheme: null,
+      ...overrides,
+    };
+  }
+
+  // Private renderer state the fixture drives directly.
+  type RendererInternals = {
+    metrics: { width: number; height: number; baseline: number };
+    currentSelectionCoords: {
+      startCol: number;
+      startRow: number;
+      endCol: number;
+      endRow: number;
+    } | null;
+    ctx: CanvasRenderingContext2D;
+    renderLine(line: GhosttyCell[], y: number, cols: number): void;
+  };
+
+  // Paint one cell on a recording ctx (happy-dom's context is not a
+  // rasterizer). Returns the cell's own background fill (excluding the
+  // full-line theme fill) and the glyph color, as painted.
+  function paint(cell: GhosttyCell, selected = false) {
+    const renderer = new CanvasRenderer(document.createElement('canvas'));
+    const r = renderer as unknown as RendererInternals;
+    r.metrics = { width: CELL_W, height: CELL_H, baseline: 15 };
+    if (selected) {
+      r.currentSelectionCoords = { startCol: 0, startRow: 0, endCol: 0, endRow: 0 };
+    }
+    let fillStyle = '';
+    const cellFills: string[] = [];
+    const glyphColors: string[] = [];
+    // Recording stand-in exposing only the 2D calls renderLine makes here.
+    r.ctx = {
+      clearRect() {},
+      fillRect(_x: number, _y: number, w: number) {
+        if (w === CELL_W) cellFills.push(fillStyle);
+      },
+      beginPath() {},
+      moveTo() {},
+      lineTo() {},
+      stroke() {},
+      measureText: () => ({ width: CELL_W }),
+      fillText() {
+        glyphColors.push(fillStyle);
+      },
+      set font(_v: string) {},
+      set fillStyle(v: string) {
+        fillStyle = v;
+      },
+      set strokeStyle(_v: string) {},
+      set lineWidth(_v: number) {},
+      set globalAlpha(_v: number) {},
+    } as unknown as CanvasRenderingContext2D;
+    // Two columns so the cell fill (w = CELL_W) differs from the line fill.
+    r.renderLine([cell, makeCell({ codepoint: 0 })], 0, 2);
+    renderer.destroy();
+    return { cellFills, glyphColors };
+  }
+
+  const INVERSE = CellFlags.INVERSE;
+
+  test('inverse default colors paint theme foreground background and theme background text', () => {
+    const { cellFills, glyphColors } = paint(makeCell({ flags: INVERSE }));
+    expect(cellFills).toEqual([DEFAULT_THEME.foreground]);
+    expect(glyphColors[0]).toBe(DEFAULT_THEME.background);
+  });
+
+  test('inverse with explicit fg and default bg paints the fg and uses theme background text', () => {
+    const { cellFills, glyphColors } = paint(
+      makeCell({ flags: INVERSE, fg_r: 1, fg_g: 2, fg_b: 3, fgIsDefault: false })
+    );
+    expect(cellFills).toEqual(['rgb(1, 2, 3)']);
+    expect(glyphColors[0]).toBe(DEFAULT_THEME.background);
+  });
+
+  test('inverse with default fg and explicit bg paints theme foreground and bg-colored text', () => {
+    const { cellFills, glyphColors } = paint(
+      makeCell({ flags: INVERSE, bg_r: 4, bg_g: 5, bg_b: 6, bgIsDefault: false })
+    );
+    expect(cellFills).toEqual([DEFAULT_THEME.foreground]);
+    expect(glyphColors[0]).toBe('rgb(4, 5, 6)');
+  });
+
+  test('non-inverse default background stays transparent over the line background', () => {
+    const { cellFills, glyphColors } = paint(makeCell());
+    expect(cellFills).toEqual([]);
+    expect(glyphColors[0]).toBe(DEFAULT_THEME.foreground);
+  });
+
+  test('non-inverse explicit black background is still painted', () => {
+    const { cellFills } = paint(makeCell({ bgIsDefault: false }));
+    expect(cellFills).toEqual(['rgb(0, 0, 0)']);
+  });
+
+  test('selection takes precedence over inverse colors', () => {
+    const { cellFills, glyphColors } = paint(makeCell({ flags: INVERSE }), true);
+    expect(cellFills).toEqual([DEFAULT_THEME.selectionBackground]);
+    expect(glyphColors[0]).toBe(DEFAULT_THEME.selectionForeground);
+  });
 });

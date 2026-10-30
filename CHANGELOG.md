@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Swap resolved theme/default and explicit colors correctly for inverse video across Canvas2D, WebGL2, and WebGPU.
 - Honor Ghostty-resolved Kitty image layers, source crops, pixel offsets, and
   scrollback placement across Canvas2D, WebGL, and WebGPU.
 - Keep WebGL text-only frames in a single opaque pass even when the image API

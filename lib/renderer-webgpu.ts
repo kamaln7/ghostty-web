@@ -215,7 +215,7 @@ fn fsMain(in: VOut) -> @location(0) vec4<f32> {
 
   if (textPass == 3u && (flags & FLAG_IS_CURSOR_CELL) == 0u) { discard; }
   if (textPass == 1u) {
-    let defaultBg = select((flags & FLAG_USE_THEME_BG) != 0u, (flags & FLAG_USE_THEME_FG) != 0u, (flags & FLAG_INVERSE) != 0u);
+    let defaultBg = (flags & FLAG_INVERSE) == 0u && (flags & FLAG_USE_THEME_BG) != 0u;
     if (defaultBg && (flags & (FLAG_IS_SELECTED | FLAG_IS_CURSOR_CELL)) == 0u) { discard; }
     return vec4<f32>(bg, 1.0);
   }
