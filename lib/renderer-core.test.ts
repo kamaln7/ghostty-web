@@ -10,7 +10,7 @@ import {
   FLAG_IS_KITTY_PLACEHOLDER,
   FLAG_IS_LINK_RANGE_HOVERED,
   FLAG_IS_SELECTED,
-  type GlyphAtlasBase,
+  GlyphAtlasBase,
   KittyAtlasBase,
   KittyTextureCacheBase,
   encodeCells,
@@ -847,6 +847,149 @@ describe('KittyAtlasBase', () => {
   test('atlasSize getter returns current size', () => {
     const atlas = new StubAtlas(2048);
     expect(atlas.atlasSize).toBe(2048);
+  });
+});
+
+describe('GlyphAtlasBase: device pixel ratio', () => {
+  class RecordingAtlas extends GlyphAtlasBase {
+    uploads: { slot: AtlasSlot; w: number; h: number }[] = [];
+    protected uploadRegion(slot: AtlasSlot, _rgba: Uint8ClampedArray, w: number, h: number): void {
+      this.uploads.push({ slot, w, h });
+    }
+    protected growTexture(): void {}
+  }
+
+  const CSS = { cellW: 10, cellH: 20, fontSize: 15, baseline: 16 };
+
+  // The atlas rasterizes through an offscreen 2D context; capture what it draws.
+  function makeAtlas(dpr?: number) {
+    const real = HTMLCanvasElement.prototype.getContext;
+    const captured: { ctx?: CanvasRenderingContext2D } = {};
+    // Same call-through as `real`, plus capturing the 2D context it returns.
+    const capture = function (this: HTMLCanvasElement, contextId: '2d') {
+      captured.ctx = real.call(this, contextId)!;
+      return captured.ctx;
+    } as unknown as typeof real;
+    const spy = spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(capture);
+    let atlas: RecordingAtlas;
+    try {
+      atlas = new RecordingAtlas(CSS.cellW, CSS.cellH, CSS.fontSize, 'monospace', dpr);
+    } finally {
+      spy.mockRestore();
+    }
+    const ctx = captured.ctx!;
+    const drawn: { font: string; y: number }[] = [];
+    ctx.fillText = (_text: string, _x: number, y: number) => {
+      drawn.push({ font: ctx.font, y });
+    };
+    return { atlas, drawn };
+  }
+
+  test('rasterizes 1:1 at DPR 1 and by default', () => {
+    for (const dpr of [undefined, 1, 0.75]) {
+      const { atlas, drawn } = makeAtlas(dpr);
+      expect(atlas.getOrRaster('A', 0, CSS.baseline)).toEqual({ u: 0, v: 0, w: 10, h: 20 });
+      expect(drawn).toEqual([{ font: '15px monospace', y: 16 }]);
+    }
+  });
+
+  test.each([
+    [2, 2],
+    [1.25, 2],
+    [2.5, 3],
+    [3, 3],
+  ])('DPR %d rasterizes the cell, font and baseline at %dx', (dpr, scale) => {
+    const { atlas, drawn } = makeAtlas(dpr);
+    expect(atlas.getOrRaster('A', 0, CSS.baseline)).toEqual({
+      u: 0,
+      v: 0,
+      w: 10 * scale,
+      h: 20 * scale,
+    });
+    expect(drawn).toEqual([{ font: `${15 * scale}px monospace`, y: 16 * scale }]);
+    // A wide glyph's slot is two raster cells wide and packs after the narrow one.
+    expect(atlas.getOrRaster('日', 0, CSS.baseline, 2)).toEqual({
+      u: 10 * scale,
+      v: 0,
+      w: 20 * scale,
+      h: 20 * scale,
+    });
+    expect(atlas.uploads.map((u) => [u.w, u.h])).toEqual([
+      [10 * scale, 20 * scale],
+      [20 * scale, 20 * scale],
+    ]);
+  });
+
+  test('reset applies the new DPR to CSS sizes instead of compounding the old scale', () => {
+    const { atlas } = makeAtlas(2);
+    atlas.getOrRaster('A', 0, CSS.baseline);
+
+    atlas.reset(10, 20, 15, 'monospace', 2);
+    expect(atlas.getOrRaster('A', 0, CSS.baseline)).toEqual({ u: 0, v: 0, w: 20, h: 40 });
+
+    atlas.reset(10, 20, 15, 'monospace', 1);
+    expect(atlas.getOrRaster('A', 0, CSS.baseline)).toEqual({ u: 0, v: 0, w: 10, h: 20 });
+
+    atlas.reset(12, 24, 18, 'monospace', 3);
+    expect(atlas.getOrRaster('A', 0, CSS.baseline)).toEqual({ u: 0, v: 0, w: 36, h: 72 });
+  });
+
+  describe('encodeCells packs raster-pixel UVs', () => {
+    function pack(dpr: number) {
+      const { atlas } = makeAtlas(dpr);
+      const cells = [
+        makeCell({ codepoint: 0x41 }),
+        makeCell({ codepoint: 0x65e5, width: 2 }),
+        makeCell({ codepoint: 0, width: 0 }),
+      ];
+      const buffer = makeStubBuffer({ cols: 3, rows: 1, cells, placements: [] });
+      const cellArray = new Uint32Array(3 * CELL_U32S);
+      encodeCells(cellArray, buffer, 0, undefined, {
+        // CSS metrics: deliberately not what the atlas slots are measured in.
+        metrics: { width: 10, height: 20, baseline: CSS.baseline },
+        selectionManager: undefined,
+        hoveredHyperlinkId: 0,
+        hoveredLinkRange: null,
+        cursorStyle: 'block' as const,
+        cursorBlinkVisible: false,
+        atlas,
+        kittyEnabled: false,
+        blockElementShaderEnabled: false,
+      });
+      const uv = (x: number) => {
+        const uvWord = cellArray[x * CELL_U32S + 2]!;
+        const sizeWord = cellArray[x * CELL_U32S + 3]!;
+        return {
+          u: uvWord & 0xffff,
+          v: uvWord >>> 16,
+          w: sizeWord & 0xffff,
+          h: sizeWord >>> 16,
+        };
+      };
+      return [uv(0), uv(1), uv(2)];
+    }
+
+    test('at DPR 1 the packed sizes equal the CSS cell', () => {
+      expect(pack(1)).toEqual([
+        { u: 0, v: 0, w: 10, h: 20 },
+        { u: 10, v: 0, w: 10, h: 20 }, // left half of the wide slot
+        { u: 20, v: 0, w: 10, h: 20 }, // right half
+      ]);
+    });
+
+    test.each([
+      [2, 2],
+      [1.25, 2],
+      [2.5, 3],
+    ])('at DPR %d each wide half is %dx a CSS cell', (dpr, scale) => {
+      const w = 10 * scale;
+      const h = 20 * scale;
+      expect(pack(dpr)).toEqual([
+        { u: 0, v: 0, w, h },
+        { u: w, v: 0, w, h },
+        { u: 2 * w, v: 0, w, h },
+      ]);
+    });
   });
 });
 

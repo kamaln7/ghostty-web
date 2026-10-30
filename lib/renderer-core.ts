@@ -284,7 +284,11 @@ export function premultiplyAlpha(rgba: Uint8ClampedArray): void {
  *
  * Cache key is `${widthInCells}|${styleBits}|${grapheme}`. Width-in-cells
  * is 1 for narrow glyphs and 2 for CJK / emoji; the slot is `cellW *
- * widthInCells` pixels wide.
+ * widthInCells` raster pixels wide.
+ *
+ * Glyphs are rasterized at `ceil(dpr)` times the CSS cell size so a HiDPI
+ * canvas samples real device pixels instead of upscaled CSS pixels. Slots
+ * (and the packed cell UVs built from them) are in these raster pixels.
  *
  * Style bits: 0x1 = bold, 0x2 = italic. FAINT is intentionally excluded —
  * atlas always rasterizes at full alpha; shaders apply the 0.5 multiplier.
@@ -295,24 +299,34 @@ export abstract class GlyphAtlasBase {
   private nextY = 0;
   private rowHeight = 0;
   private cache = new Map<string, AtlasSlot>();
+  /** Cell size in raster (atlas) pixels: CSS cell size × rasterScale. */
   protected cellW: number;
   protected cellH: number;
+  /** Font size in raster pixels. */
   protected fontSize: number;
   protected fontFamily: string;
+  /** Integer supersampling factor, `ceil(dpr)`, at least 1. */
+  private rasterScale: number;
   private offscreen = document.createElement('canvas');
   private offCtx: CanvasRenderingContext2D;
 
-  constructor(cellW: number, cellH: number, fontSize: number, fontFamily: string) {
-    this.cellW = cellW;
-    this.cellH = cellH;
-    this.fontSize = fontSize;
+  /** `cellW`, `cellH`, `fontSize` are in CSS pixels; `dpr` picks the raster scale. */
+  constructor(cellW: number, cellH: number, fontSize: number, fontFamily: string, dpr = 1) {
+    this.rasterScale = GlyphAtlasBase.scaleFor(dpr);
+    this.cellW = cellW * this.rasterScale;
+    this.cellH = cellH * this.rasterScale;
+    this.fontSize = fontSize * this.rasterScale;
     this.fontFamily = fontFamily;
     this.size = 1024;
     // Offscreen sized for the widest glyph we support (2 cells for CJK /
     // emoji). Narrow glyphs only use the left half; we crop the read.
-    this.offscreen.width = cellW * 2;
-    this.offscreen.height = cellH;
+    this.offscreen.width = this.cellW * 2;
+    this.offscreen.height = this.cellH;
     this.offCtx = this.offscreen.getContext('2d', { willReadFrequently: true })!;
+  }
+
+  private static scaleFor(dpr: number): number {
+    return Math.max(1, Math.ceil(dpr || 1));
   }
 
   /**
@@ -336,17 +350,19 @@ export abstract class GlyphAtlasBase {
    */
   protected abstract growTexture(newSize: number): void;
 
-  reset(cellW: number, cellH: number, fontSize: number, fontFamily: string): void {
-    this.cellW = cellW;
-    this.cellH = cellH;
-    this.fontSize = fontSize;
+  /** Re-target the atlas; sizes are CSS pixels and replace, not compound, prior ones. */
+  reset(cellW: number, cellH: number, fontSize: number, fontFamily: string, dpr = 1): void {
+    this.rasterScale = GlyphAtlasBase.scaleFor(dpr);
+    this.cellW = cellW * this.rasterScale;
+    this.cellH = cellH * this.rasterScale;
+    this.fontSize = fontSize * this.rasterScale;
     this.fontFamily = fontFamily;
     this.cache.clear();
     this.nextX = 0;
     this.nextY = 0;
     this.rowHeight = 0;
-    this.offscreen.width = cellW * 2;
-    this.offscreen.height = cellH;
+    this.offscreen.width = this.cellW * 2;
+    this.offscreen.height = this.cellH;
   }
 
   /**
@@ -363,6 +379,7 @@ export abstract class GlyphAtlasBase {
     const key = `${widthInCells}|${styleBits}|${grapheme}`;
     const cached = this.cache.get(key);
     if (cached) return cached;
+    baseline *= this.rasterScale;
 
     const w = this.cellW * widthInCells;
     const h = this.cellH;
@@ -540,9 +557,6 @@ export function encodeCells(
   }
 
   const defaultEmptyFlags = (FLAG_USE_THEME_FG | FLAG_USE_THEME_BG) >>> 0;
-  const cellW = ctx.metrics.width;
-  const cellH = ctx.metrics.height;
-
   // Batch-fetch the entire viewport once to avoid the WASM crossing cost
   // of getLine(y) inside the loop.
   const viewport = buffer.getViewport();
@@ -571,6 +585,7 @@ export function encodeCells(
       slotU: number;
       slotV: number;
       slotH: number;
+      halfW: number;
       fgPacked: number;
       bgPacked: number;
       flags: number;
@@ -584,8 +599,10 @@ export function encodeCells(
           arr[i + 0] = pendingRightHalf.fgPacked;
           arr[i + 1] = pendingRightHalf.bgPacked;
           arr[i + 2] =
-            ((pendingRightHalf.slotU + cellW) & 0xffff) | ((pendingRightHalf.slotV & 0xffff) << 16);
-          arr[i + 3] = (cellW & 0xffff) | ((pendingRightHalf.slotH & 0xffff) << 16);
+            ((pendingRightHalf.slotU + pendingRightHalf.halfW) & 0xffff) |
+            ((pendingRightHalf.slotV & 0xffff) << 16);
+          arr[i + 3] =
+            (pendingRightHalf.halfW & 0xffff) | ((pendingRightHalf.slotH & 0xffff) << 16);
           arr[i + 4] = pendingRightHalf.flags;
           pendingRightHalf = null;
         } else {
@@ -688,15 +705,15 @@ export function encodeCells(
         const slot = ctx.atlas.getOrRaster(grapheme, styleBits, ctx.metrics.baseline, widthInCells);
         if (slot.color) flags |= FLAG_COLOR_GLYPH;
         arr[i + 2] = (slot.u & 0xffff) | ((slot.v & 0xffff) << 16);
-        arr[i + 3] =
-          widthInCells === 2
-            ? (cellW & 0xffff) | ((cellH & 0xffff) << 16)
-            : (slot.w & 0xffff) | ((slot.h & 0xffff) << 16);
+        // A wide slot spans two cells; each half samples half of its raster width.
+        const halfW = widthInCells === 2 ? slot.w / 2 : slot.w;
+        arr[i + 3] = (halfW & 0xffff) | ((slot.h & 0xffff) << 16);
         if (widthInCells === 2) {
           pendingRightHalf = {
             slotU: slot.u,
             slotV: slot.v,
             slotH: slot.h,
+            halfW,
             fgPacked: arr[i + 0]!,
             bgPacked: arr[i + 1]!,
             flags: 0,
