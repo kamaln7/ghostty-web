@@ -1967,7 +1967,6 @@ export class Terminal implements ITerminalCore {
   private handleMouseLeave = (): void => {
     // Clear link underline
     if (this.renderer && this.wasmTerm) {
-
       this.renderer.setHoveredLinkRange(null);
     }
 
