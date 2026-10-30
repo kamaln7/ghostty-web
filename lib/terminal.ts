@@ -73,7 +73,6 @@ export class Terminal implements ITerminalCore {
   private ghostty?: Ghostty;
   public wasmTerm?: GhosttyTerminal; // Made public for link providers
   public renderer?: Renderer; // Made public for FitAddon
-  private previousHoveredHyperlinkId = 0;
   private inputHandler?: InputHandler;
   private selectionManager?: SelectionManager;
   private bidiMapper = new RowBidiMapper();
@@ -1832,11 +1831,10 @@ export class Terminal implements ITerminalCore {
     const x = Math.floor((e.clientX - rect.left) / cellW);
     const y = Math.floor((e.clientY - rect.top) / cellH);
 
-    // Get hyperlink_id directly from the cell at this position
-    // Must account for viewportY (scrollback position)
+    // Hover highlighting is scoped by the detected link range below, not by
+    // cell.hyperlink_id: the WASM only exposes a has-hyperlink marker (0 or 1),
+    // so matching on it would highlight every OSC8 link at once.
     const viewportRow = y; // Row in the viewport (0 to rows-1)
-    let hyperlinkId = 0;
-
     // When scrolled, fetch from scrollback or screen based on position
     // NOTE: viewportY may be fractional during smooth scrolling. The renderer
     // uses Math.floor(viewportY) when mapping viewport rows to scrollback vs
@@ -1848,36 +1846,19 @@ export class Terminal implements ITerminalCore {
     if (viewportY > 0) {
       const scrollbackLength = this.wasmTerm.getScrollbackLength();
       if (viewportRow < viewportY) {
-        // Mouse is over scrollback content
         const scrollbackOffset = scrollbackLength - viewportY + viewportRow;
         line = this.wasmTerm.getScrollbackLine(scrollbackOffset);
       } else {
-        // Mouse is over screen content (bottom part of viewport)
         const screenRow = viewportRow - viewportY;
         line = this.wasmTerm.getLine(screenRow);
       }
     } else {
-      // At bottom - just use screen buffer
       line = this.wasmTerm.getLine(viewportRow);
     }
 
     // Hit-test against the LOGICAL column: `line` holds cells in logical
     // (buffer) order, but `x` is a visual (screen-position) column.
     const lx = line ? this.visualColToLogical(line, x) : x;
-
-    if (line && lx >= 0 && lx < line.length) {
-      hyperlinkId = line[lx].hyperlink_id;
-    }
-
-    // Update renderer for underline rendering
-    const previousHyperlinkId = this.previousHoveredHyperlinkId;
-    if (hyperlinkId !== previousHyperlinkId) {
-      this.renderer.setHoveredHyperlinkId(hyperlinkId);
-      this.previousHoveredHyperlinkId = hyperlinkId;
-
-      // The 60fps render loop will pick up the change automatically
-      // No need to force a render - this keeps performance smooth
-    }
 
     // Check if there's a link at this position (for click handling and cursor)
     // Buffer API expects absolute buffer coordinates (including scrollback)
@@ -1929,7 +1910,7 @@ export class Terminal implements ITerminalCore {
             this.canvas.style.cursor = cursorStyle;
           }
 
-          // Update renderer for underline (for regex URLs without hyperlink_id)
+          // Update renderer underline from the URI-backed link range
           if (this.renderer) {
             if (link) {
               // Convert buffer coordinates to viewport coordinates
@@ -1968,16 +1949,9 @@ export class Terminal implements ITerminalCore {
    * Handle mouse leave to clear link hover
    */
   private handleMouseLeave = (): void => {
-    // Clear hyperlink underline
+    // Clear link underline
     if (this.renderer && this.wasmTerm) {
-      const previousHyperlinkId = this.previousHoveredHyperlinkId;
-      if (previousHyperlinkId > 0) {
-        this.renderer.setHoveredHyperlinkId(0);
-        this.previousHoveredHyperlinkId = 0;
 
-        // The 60fps render loop will pick up the change automatically
-      }
-      // Clear regex link underline
       this.renderer.setHoveredLinkRange(null);
     }
 

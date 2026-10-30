@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Limit OSC 8 hover underlines to the detected link range instead of shared parser markers.
 - Rasterize GPU glyph atlases at or above display resolution and preserve wide-glyph UVs when DPR or font metrics change.
 - Swap resolved theme/default and explicit colors correctly for inverse video across Canvas2D, WebGL2, and WebGPU.
 - Honor Ghostty-resolved Kitty image layers, source crops, pixel offsets, and

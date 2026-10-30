@@ -10,6 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { Terminal } from './terminal';
 import { createIsolatedTerminal } from './test-helpers';
 
@@ -3099,6 +3100,153 @@ describe('disableStdin', () => {
 // ==========================================================================
 // xterm.js Compatibility: unicode API
 // ==========================================================================
+
+describe('OSC8 link hover painting', () => {
+  const HOVER_UNDERLINE = '#4A90E2';
+
+  let term: Terminal;
+  let container: HTMLElement;
+  let restoreGetContext: () => void;
+  let throttledMoves: Array<() => void>;
+  let setTimeoutSpy: { mockRestore(): void };
+  // Hover underlines painted ("row:col") and text cells drawn since the last reset.
+  const paint = { underlines: new Set<string>(), textDraws: 0 };
+
+  beforeEach(async () => {
+    paint.underlines.clear();
+    paint.textDraws = 0;
+
+    // Record what the Canvas2D renderer strokes/draws. Installed before open() so
+    // the renderer's context is the recording one.
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    const recordingGetContext = function (
+      this: HTMLCanvasElement,
+      contextId: '2d',
+      options?: CanvasRenderingContext2DSettings
+    ) {
+      const ctx = originalGetContext.call(this, contextId, options);
+      if (!ctx) return ctx;
+      const { moveTo, stroke, fillText } = ctx;
+      let lastX = 0;
+      let lastY = 0;
+      ctx.moveTo = (x: number, y: number) => {
+        lastX = x;
+        lastY = y;
+        moveTo.call(ctx, x, y);
+      };
+      ctx.stroke = () => {
+        if (ctx.strokeStyle === HOVER_UNDERLINE) {
+          const { width, height } = term.renderer!.getMetrics();
+          paint.underlines.add(`${Math.floor(lastY / height)}:${Math.round(lastX / width)}`);
+        }
+        stroke.call(ctx);
+      };
+      ctx.fillText = (text: string, x: number, y: number) => {
+        paint.textDraws++;
+        fillText.call(ctx, text, x, y);
+      };
+      return ctx;
+    };
+    // The DOM getContext signature is overloaded; the recorder only serves '2d'.
+    HTMLCanvasElement.prototype.getContext =
+      recordingGetContext as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    restoreGetContext = () => {
+      HTMLCanvasElement.prototype.getContext = originalGetContext;
+    };
+
+    // Terminal throttles mouse moves with a 16ms timer; run those callbacks on
+    // demand instead of waiting on the wall clock.
+    throttledMoves = [];
+    const realSetTimeout = window.setTimeout.bind(window);
+    setTimeoutSpy = spyOn(window, 'setTimeout').mockImplementation(((
+      handler: TimerHandler,
+      delay?: number
+    ) => {
+      if (delay === 16 && typeof handler === 'function') {
+        throttledMoves.push(() => handler());
+        return throttledMoves.length;
+      }
+      return realSetTimeout(handler, delay);
+      // The timer API is overloaded; only (handler, delay) is used here.
+    }) as unknown as typeof window.setTimeout);
+
+    term = await createIsolatedTerminal({ cols: 20, rows: 3 });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    await term.open(container);
+  });
+
+  afterEach(() => {
+    term.dispose();
+    container.remove();
+    setTimeoutSpy.mockRestore();
+    restoreGetContext();
+  });
+
+  function renderFrame(): void {
+    term.renderer!.render(term.wasmTerm!, term.getViewportY(), term);
+  }
+
+  // Real mousemove at the centre of a cell; waits for the async link lookup, then
+  // paints a frame. `paint` then holds what was painted since the move.
+  async function hoverAndPaint(col: number, row: number): Promise<void> {
+    const { width, height } = term.renderer!.getMetrics();
+    paint.underlines.clear();
+    paint.textDraws = 0;
+    container.dispatchEvent(
+      new MouseEvent('mousemove', {
+        bubbles: true,
+        clientX: col * width + width / 2,
+        clientY: row * height + height / 2,
+      })
+    );
+    for (const run of throttledMoves.splice(0)) run();
+    await nextTurn();
+    renderFrame();
+  }
+
+  test('paints only the hovered link when distinct URIs share the hyperlink marker', async () => {
+    // Row 0: "AAA BBB" (two distinct links); row 1: "CCC" (a third).
+    term.write(
+      '\x1b]8;;http://a.example\x07AAA\x1b]8;;\x07 \x1b]8;;http://b.example\x07BBB\x1b]8;;\x07\r\n' +
+        '\x1b]8;;http://c.example\x07CCC\x1b]8;;\x07'
+    );
+    // The WASM ABI only reports whether a cell is linked, so distinct links carry
+    // the same marker; hover must not be keyed on it.
+    const row0 = term.wasmTerm!.getLine(0)!;
+    expect(row0[0]!.hyperlink_id).toBeGreaterThan(0);
+    expect(row0[4]!.hyperlink_id).toBe(row0[0]!.hyperlink_id);
+
+    // Nothing is underlined until a link is hovered.
+    renderFrame();
+    expect([...paint.underlines]).toEqual([]);
+
+    await hoverAndPaint(1, 0);
+    expect([...paint.underlines].sort()).toEqual(['0:0', '0:1', '0:2']);
+
+    await hoverAndPaint(5, 0);
+    expect([...paint.underlines].sort()).toEqual(['0:4', '0:5', '0:6']);
+
+    await hoverAndPaint(1, 1);
+    expect([...paint.underlines].sort()).toEqual(['1:0', '1:1', '1:2']);
+
+    // The unlinked cell between the links repaints without any underline.
+    await hoverAndPaint(3, 0);
+    expect(paint.textDraws).toBeGreaterThan(0);
+    expect([...paint.underlines]).toEqual([]);
+
+    await hoverAndPaint(0, 0);
+    expect([...paint.underlines].sort()).toEqual(['0:0', '0:1', '0:2']);
+
+    // Leaving the terminal repaints the row without the underline.
+    paint.underlines.clear();
+    paint.textDraws = 0;
+    container.dispatchEvent(new MouseEvent('mouseleave'));
+    renderFrame();
+    expect(paint.textDraws).toBeGreaterThan(0);
+    expect([...paint.underlines]).toEqual([]);
+  });
+});
 
 describe('unicode API', () => {
   test('activeVersion returns 15.1', async () => {
