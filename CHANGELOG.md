@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Report buttonless mouse motion as hover and recover presses or releases outside the terminal.
 - Limit OSC 8 hover underlines to the detected link range instead of shared parser markers.
 - Rasterize GPU glyph atlases at or above display resolution and preserve wide-glyph UVs when DPR or font metrics change.
 - Swap resolved theme/default and explicit colors correctly for inverse video across Canvas2D, WebGL2, and WebGPU.
@@ -54,6 +55,7 @@
 
 ### Added
 
+- Render Unicode sextants and matching half/full blocks as cell-aligned geometry, including fractional device-pixel ratios.
 - Open OSC 8 and plain-text links with a single-finger touch tap, while preserving Ctrl/Cmd-click for mouse input.
 - Play Kitty image animations using Ghostty animation deadlines, respecting
   synchronized output and cancelling scheduled work when the terminal is disposed.
@@ -86,9 +88,6 @@
 - The new `Alt+Shift+R` hotkey binds on `e.code === 'KeyR'` rather than
   `e.key === 'R'`, fixing a silent failure on macOS where `Option` transforms
   `R` into a dead-key character before keydown fires.
-### Bug Fixes
-
-- Report buttonless mouse motion as hover and recover presses or releases outside the terminal.
 
 ## [0.4.0](https://github.com/coder/ghostty-web/compare/v0.3.0...v0.4.0) (2025-12-09)
 

@@ -672,7 +672,16 @@ export function encodeCells(
           }
         }
       }
-      if (ctx.blockElementShaderEnabled && cp >= 0x2580 && cp <= 0x259f && c.grapheme_len === 0) {
+      // Sextant equivalents share the same atlas geometry as the sextant glyphs.
+      if (
+        ctx.blockElementShaderEnabled &&
+        cp >= 0x2580 &&
+        cp <= 0x259f &&
+        cp !== 0x2588 &&
+        cp !== 0x258c &&
+        cp !== 0x2590 &&
+        c.grapheme_len === 0
+      ) {
         flags |= FLAG_IS_BLOCK_ELEMENT;
         arr[i + 5] = cp - 0x2580;
       }

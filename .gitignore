@@ -1,8 +1,8 @@
 node_modules/
-dist/
+!dist/
 .DS_Store
 *.log
 .vite/
 
-# WASM build output (built locally and in CI)
-ghostty-vt.wasm
+# Prebuilt runtime committed on kamal/integration for Booba consumers.
+!ghostty-vt.wasm

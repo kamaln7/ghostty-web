@@ -2,6 +2,8 @@
  * Font ink follows the font's advance/line box, not our rounded, emoji-safe
  * cell metrics. Never scale ordinary text to compensate for that difference.
  */
+import { drawSextants, sextantMask } from './sextants';
+
 const LEFT = 1;
 const RIGHT = 2;
 const UP = 4;
@@ -48,6 +50,13 @@ export function drawBoxDrawing(
   height: number,
   fontSize: number
 ): boolean {
+  const sextants = sextantMask(grapheme);
+  if (sextants >= 0) {
+    if (sextants > 0) {
+      drawSextants(ctx, sextants, x, y, width, height, ctx.getTransform().a);
+    }
+    return true;
+  }
   if (grapheme.length !== 1) return false;
   const box = boxes.get(grapheme.charCodeAt(0));
   if (!box) return false;
