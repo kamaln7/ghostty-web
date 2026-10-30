@@ -11,7 +11,7 @@ export interface ITerminalOptions {
   cursorBlink?: boolean; // Default: false
   cursorStyle?: 'block' | 'underline' | 'bar';
   theme?: ITheme;
-  scrollback?: number; // Default: 1000
+  scrollback?: number; // Default: 10000
   fontSize?: number; // Default: 15
   /** Default: '"JetBrains Mono", "Cascadia Code", "Iosevka", "Source Code Pro", "ui-monospace", "SF Mono", Menlo, Consolas, monospace'. */
   fontFamily?: string;
