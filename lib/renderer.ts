@@ -12,6 +12,7 @@
 
 import type { ITheme } from './interfaces';
 import type { SelectionManager } from './selection-manager';
+import { drawSextants, sextantMask } from './sextants';
 import type { GhosttyCell, ILink } from './types';
 import { CellFlags } from './types';
 
@@ -647,7 +648,20 @@ export class CanvasRenderer {
       // Simple cell - single codepoint
       char = String.fromCodePoint(cell.codepoint || 32); // Default to space if null
     }
-    this.ctx.fillText(char, textX, textY);
+    const sextants = sextantMask(char);
+    if (sextants >= 0) {
+      drawSextants(
+        this.ctx,
+        sextants,
+        cellX,
+        cellY,
+        cellWidth,
+        this.metrics.height,
+        this.devicePixelRatio
+      );
+    } else {
+      this.ctx.fillText(char, textX, textY);
+    }
 
     // Reset alpha
     if (cell.flags & CellFlags.FAINT) {

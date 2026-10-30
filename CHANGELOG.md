@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Render Unicode sextants and matching half/full blocks as cell-aligned geometry, including fractional device-pixel ratios.
+
 ## [0.4.0](https://github.com/coder/ghostty-web/compare/v0.3.0...v0.4.0) (2025-12-09)
 
 ### Features
