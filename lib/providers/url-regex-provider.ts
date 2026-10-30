@@ -9,6 +9,7 @@
  */
 
 import type { IBufferRange, ILink, ILinkProvider } from '../types';
+import { isLinkActivation } from './link-activation';
 
 /**
  * URL Regex Provider
@@ -81,8 +82,8 @@ export class UrlRegexProvider implements ILinkProvider {
             end: { x: endX, y },
           },
           activate: (event) => {
-            // Open link if Ctrl/Cmd is pressed
-            if (event.ctrlKey || event.metaKey) {
+            // Open link on Ctrl/Cmd+click or a touch tap
+            if (isLinkActivation(event)) {
               window.open(url, '_blank', 'noopener,noreferrer');
             }
           },

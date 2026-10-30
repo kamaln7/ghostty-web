@@ -54,6 +54,7 @@
 
 ### Added
 
+- Open OSC 8 and plain-text links with a single-finger touch tap, while preserving Ctrl/Cmd-click for mouse input.
 - Play Kitty image animations using Ghostty animation deadlines, respecting
   synchronized output and cancelling scheduled work when the terminal is disposed.
 - Export `ImageFrame` and `RenderImage`, with `GhosttyTerminal.getImageFrame()`

@@ -9,7 +9,7 @@
  * Uses createIsolatedTerminal() to ensure each test gets its own WASM instance.
  */
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, type Mock, test } from 'bun:test';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { Terminal } from './terminal';
 import { createIsolatedTerminal } from './test-helpers';
@@ -3722,5 +3722,214 @@ describe('Terminal cursor shape (DECSCUSR)', () => {
     expect(setCursorStyle).not.toHaveBeenCalled();
 
     term.dispose();
+  });
+});
+
+describe('Touch link activation', () => {
+  const OSC8_LINK = '\x1b]8;;https://example.com/osc\x07here\x1b]8;;\x07';
+  let term: Terminal;
+  let container: HTMLElement;
+  let openSpy: Mock<typeof window.open>;
+
+  beforeEach(async () => {
+    openSpy = spyOn(window, 'open').mockImplementation(() => null);
+    term = await createIsolatedTerminal({ cols: 40, rows: 4 });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    term.open(container);
+  });
+
+  afterEach(() => {
+    term.dispose();
+    container.remove();
+    openSpy.mockRestore();
+  });
+
+  /** Client-space center of a viewport cell. */
+  function cellCenter(col: number, row: number): { clientX: number; clientY: number } {
+    const { width, height } = term.renderer!.getMetrics();
+    return { clientX: (col + 0.5) * width, clientY: (row + 0.5) * height };
+  }
+
+  function touch(type: string, init: PointerEventInit & { clientX: number; clientY: number }) {
+    container.dispatchEvent(
+      new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerType: 'touch',
+        pointerId: 1,
+        isPrimary: true,
+        button: 0,
+        ...init,
+      })
+    );
+  }
+
+  /**
+   * Link lookup is a promise chain; one macrotask yield lets it finish.
+   * Not a duration guess: there is no event to await when nothing should open.
+   */
+  async function settle(): Promise<void> {
+    await nextTurn();
+  }
+
+  async function tap(col: number, row: number): Promise<void> {
+    const at = cellCenter(col, row);
+    touch('pointerdown', at);
+    touch('pointerup', at);
+    await settle();
+  }
+
+  test('a stationary tap opens an OSC 8 link without a modifier key', async () => {
+    term.write(`tap ${OSC8_LINK} text`);
+
+    await tap(5, 0);
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://example.com/osc',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  test('a stationary tap opens a plain-text URL', async () => {
+    term.write('see https://example.com/plain now');
+
+    await tap(10, 0);
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://example.com/plain',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  test('a tap opens links on the alternate screen', async () => {
+    term.write('main screen\x1b[?1049h\x1b[H');
+    term.write(`tap ${OSC8_LINK}`);
+    expect(term.wasmTerm?.isAlternateScreen()).toBe(true);
+
+    await tap(5, 0);
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://example.com/osc',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  test('a tap that is not on a link opens nothing', async () => {
+    term.write(`tap ${OSC8_LINK} text`);
+
+    await tap(0, 0);
+    await tap(20, 0);
+
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  test('a drag past the tap slop opens nothing, and a later tap still works', async () => {
+    term.write(`tap ${OSC8_LINK} text`);
+    const start = cellCenter(5, 0);
+
+    touch('pointerdown', start);
+    touch('pointermove', { ...start, clientX: start.clientX + 5 });
+    touch('pointerup', start);
+    await settle();
+    expect(openSpy).not.toHaveBeenCalled();
+
+    await tap(5, 0);
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('a press released in a different cell opens nothing', async () => {
+    term.write(`tap ${OSC8_LINK} text`);
+    const { width } = term.renderer!.getMetrics();
+    // Start just inside the right edge of the first link cell, end just past it:
+    // within the 4px slop but in the neighboring (also linked) cell.
+    const down = { clientX: 5 * width + width - 1, clientY: cellCenter(5, 0).clientY };
+    const up = { clientX: down.clientX + 2, clientY: down.clientY };
+
+    touch('pointerdown', down);
+    touch('pointerup', up);
+    await settle();
+
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  test('a cancelled touch opens nothing', async () => {
+    term.write(`tap ${OSC8_LINK} text`);
+    const at = cellCenter(5, 0);
+
+    touch('pointerdown', at);
+    touch('pointercancel', at);
+    touch('pointerup', at);
+    await settle();
+
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  test('multi-touch opens nothing whichever finger lifts first', async () => {
+    term.write(`tap ${OSC8_LINK} text`);
+    const at = cellCenter(5, 0);
+
+    for (const [first, second] of [
+      [1, 2],
+      [2, 1],
+    ]) {
+      touch('pointerdown', { ...at, pointerId: 1 });
+      touch('pointerdown', { ...at, pointerId: 2, isPrimary: false });
+      touch('pointerup', { ...at, pointerId: first, isPrimary: first === 1 });
+      touch('pointerup', { ...at, pointerId: second, isPrimary: second === 1 });
+      await settle();
+    }
+    expect(openSpy).not.toHaveBeenCalled();
+
+    await tap(5, 0);
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('plain mouse and pen input still require Ctrl/Cmd', async () => {
+    term.write(`tap ${OSC8_LINK} text`);
+    const at = cellCenter(5, 0);
+
+    for (const pointerType of ['mouse', 'pen']) {
+      touch('pointerdown', { ...at, pointerType });
+      touch('pointerup', { ...at, pointerType });
+      container.dispatchEvent(new MouseEvent('click', { bubbles: true, ...at }));
+    }
+    await settle();
+    expect(openSpy).not.toHaveBeenCalled();
+
+    container.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true, ...at }));
+    await settle();
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('the compatibility click after a tap does not open the link twice', async () => {
+    term.write(`tap ${OSC8_LINK} text`);
+    const at = cellCenter(5, 0);
+
+    await tap(5, 0);
+    container.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, ...at }));
+    container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, ...at }));
+    container.dispatchEvent(new MouseEvent('click', { bubbles: true, ...at }));
+    await settle();
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('a tap after dispose opens nothing', async () => {
+    term.write(`tap ${OSC8_LINK} text`);
+    const at = cellCenter(5, 0);
+    term.dispose();
+
+    touch('pointerdown', at);
+    touch('pointerup', at);
+    await settle();
+
+    expect(openSpy).not.toHaveBeenCalled();
   });
 });

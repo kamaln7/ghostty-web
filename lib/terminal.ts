@@ -86,6 +86,12 @@ export class Terminal implements ITerminalCore {
   private mouseMoveThrottleTimeout?: number;
   private pendingMouseMove?: MouseEvent;
 
+  // Touch link activation: the single finger that may still become a tap, and
+  // every touch pointer currently down (a second finger cancels the tap).
+  private static readonly TOUCH_TAP_SLOP = 4; // px
+  private touchLinkPress?: { pointerId: number; x: number; y: number };
+  private activeTouchPointers = new Set<number>();
+
   // Event emitters
   private dataEmitter = new EventEmitter<string>();
   private resizeEmitter = new EventEmitter<{ cols: number; rows: number }>();
@@ -641,6 +647,10 @@ export class Terminal implements ITerminalCore {
       parent.addEventListener('mousemove', this.handleMouseMove);
       parent.addEventListener('mouseleave', this.handleMouseLeave);
       parent.addEventListener('click', this.handleClick);
+      parent.addEventListener('pointerdown', this.handlePointerDown);
+      parent.addEventListener('pointermove', this.handlePointerMove);
+      parent.addEventListener('pointerup', this.handlePointerUp);
+      parent.addEventListener('pointercancel', this.handlePointerCancel);
 
       // Setup document-level mouseup for scrollbar drag (so drag works even outside canvas)
       document.addEventListener('mouseup', this.handleMouseUp);
@@ -1697,6 +1707,12 @@ export class Terminal implements ITerminalCore {
       this.element.removeEventListener('mousemove', this.handleMouseMove);
       this.element.removeEventListener('mouseleave', this.handleMouseLeave);
       this.element.removeEventListener('click', this.handleClick);
+      this.element.removeEventListener('pointerdown', this.handlePointerDown);
+      this.element.removeEventListener('pointermove', this.handlePointerMove);
+      this.element.removeEventListener('pointerup', this.handlePointerUp);
+      this.element.removeEventListener('pointercancel', this.handlePointerCancel);
+      this.touchLinkPress = undefined;
+      this.activeTouchPointers.clear();
 
       // Remove contenteditable and accessibility attributes added in open()
       this.element.removeAttribute('contenteditable');
@@ -1973,6 +1989,71 @@ export class Terminal implements ITerminalCore {
   };
 
   /**
+   * Touch link activation. Browsers don't reliably deliver a Ctrl/Cmd click for
+   * touch input, so a stationary single-finger tap on a link activates it.
+   * Tracks the one finger that may become a tap; a second finger, movement
+   * beyond TOUCH_TAP_SLOP, or cancellation invalidates it.
+   */
+  private handlePointerDown = (e: PointerEvent): void => {
+    if (e.pointerType !== 'touch') return;
+    this.activeTouchPointers.add(e.pointerId);
+    this.touchLinkPress =
+      this.activeTouchPointers.size === 1 && e.isPrimary
+        ? { pointerId: e.pointerId, x: e.clientX, y: e.clientY }
+        : undefined;
+  };
+
+  private handlePointerMove = (e: PointerEvent): void => {
+    if (e.pointerType !== 'touch') return;
+    const press = this.touchLinkPress;
+    if (press && press.pointerId === e.pointerId && this.exceedsTapSlop(press, e)) {
+      this.touchLinkPress = undefined;
+    }
+  };
+
+  private handlePointerUp = (e: PointerEvent): void => {
+    if (e.pointerType !== 'touch') return;
+    this.activeTouchPointers.delete(e.pointerId);
+    const press = this.touchLinkPress;
+    if (!press || press.pointerId !== e.pointerId) return;
+    this.touchLinkPress = undefined;
+    if (this.exceedsTapSlop(press, e)) return;
+
+    // A tap that crosses a cell boundary is ambiguous; require the same cell.
+    const from = this.getCellAt(press.x, press.y);
+    const to = this.getCellAt(e.clientX, e.clientY);
+    if (!from || !to || from.x !== to.x || from.y !== to.y) return;
+
+    void this.handleClick(e);
+  };
+
+  private handlePointerCancel = (e: PointerEvent): void => {
+    if (e.pointerType !== 'touch') return;
+    this.activeTouchPointers.delete(e.pointerId);
+    this.touchLinkPress = undefined;
+  };
+
+  private exceedsTapSlop(press: { x: number; y: number }, e: PointerEvent): boolean {
+    return (
+      Math.abs(e.clientX - press.x) > Terminal.TOUCH_TAP_SLOP ||
+      Math.abs(e.clientY - press.y) > Terminal.TOUCH_TAP_SLOP
+    );
+  }
+
+  /**
+   * Terminal cell (viewport column/row) under a client-space point.
+   */
+  private getCellAt(clientX: number, clientY: number): { x: number; y: number } | undefined {
+    if (!this.canvas || !this.renderer) return undefined;
+    const rect = this.canvas.getBoundingClientRect();
+    const { width, height } = this.renderer.getMetrics();
+    return {
+      x: Math.floor((clientX - rect.left) / width),
+      y: Math.floor((clientY - rect.top) / height),
+    };
+  }
+
+  /**
    * Handle mouse click for link activation
    */
   private handleClick = async (e: MouseEvent): Promise<void> => {
@@ -1981,10 +2062,9 @@ export class Terminal implements ITerminalCore {
     if (!this.canvas || !this.renderer || !this.linkDetector || !this.wasmTerm) return;
 
     // Get click position
-    const rect = this.canvas.getBoundingClientRect();
-    const { width: cellW, height: cellH } = this.renderer.getMetrics();
-    const x = Math.floor((e.clientX - rect.left) / cellW);
-    const y = Math.floor((e.clientY - rect.top) / cellH);
+    const cell = this.getCellAt(e.clientX, e.clientY);
+    if (!cell) return;
+    const { x, y } = cell;
 
     // Calculate buffer row (same logic as processMouseMove). Also fetch the
     // same line object so the visual→logical column conversion below maps
