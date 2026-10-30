@@ -1192,4 +1192,73 @@ describe('InputHandler', () => {
       expect(dataReceived.length).toBe(0);
     });
   });
+
+  describe('Mouse motion reporting', () => {
+    let surface: HTMLDivElement;
+    function track(mode: number, sgr = true): InputHandler {
+      surface = document.createElement('div');
+      return new InputHandler(
+        ghostty,
+        surface,
+        (data) => dataReceived.push(data),
+        () => {},
+        undefined,
+        undefined,
+        (value) => value === mode,
+        undefined,
+        undefined,
+        {
+          hasMouseTracking: () => true,
+          hasSgrMouseMode: () => sgr,
+          getCellDimensions: () => ({ width: 10, height: 20 }),
+          getCanvasOffset: () => ({ left: 0, top: 0 }),
+        }
+      );
+    }
+
+    function move(buttons: number): void {
+      surface.dispatchEvent(new MouseEvent('mousemove', { clientX: 25, clientY: 25, buttons }));
+    }
+
+    test('reports current DOM buttons and distinguishes hover from left-button motion', () => {
+      const handler = track(1003);
+      for (const buttons of [0, 1, 4, 2, 6]) move(buttons);
+      expect(dataReceived).toEqual([
+        '\x1b[<35;3;2M',
+        '\x1b[<32;3;2M',
+        '\x1b[<33;3;2M',
+        '\x1b[<34;3;2M',
+        '\x1b[<33;3;2M',
+      ]);
+      handler.dispose();
+    });
+
+    test('button-motion tracking recovers missed presses and releases', () => {
+      const handler = track(1002);
+      surface.dispatchEvent(
+        new MouseEvent('mousedown', { clientX: 25, clientY: 25, button: 0, buttons: 1 })
+      );
+      dataReceived.length = 0;
+      move(0); // The left button was released outside the container.
+      move(2); // The right button was pressed outside the container.
+      move(0);
+      expect(dataReceived).toEqual(['\x1b[<34;3;2M']);
+      handler.dispose();
+    });
+
+    test('legacy mouse encoding also reports the no-button motion code', () => {
+      const handler = track(1003, false);
+      move(0);
+      expect(dataReceived).toEqual(['\x1b[MC#"']);
+      handler.dispose();
+    });
+
+    test('does not emit motion in click-only tracking mode', () => {
+      const handler = track(1000);
+      move(0);
+      move(1);
+      expect(dataReceived).toEqual([]);
+      handler.dispose();
+    });
+  });
 });

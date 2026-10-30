@@ -863,6 +863,10 @@ export class InputHandler {
     if (this.isDisposed) return;
     if (!this.mouseConfig?.hasMouseTracking()) return;
 
+    // Recover presses/releases outside the container; DOM swaps middle/right bits.
+    this.mouseButtonsPressed =
+      (event.buttons & 1) | ((event.buttons & 4) >> 1) | ((event.buttons & 2) << 1);
+
     // Check if button motion mode or any-event tracking is enabled
     // Mode 1002 = button motion, Mode 1003 = any motion
     const hasButtonMotion = this.getModeCallback?.(1002) ?? false;
@@ -876,8 +880,8 @@ export class InputHandler {
     const cell = this.pixelToCell(event);
     if (!cell) return;
 
-    // Determine which button to report (or 32 for motion with no button)
-    let button = 32; // Motion flag
+    // Button 3 means no button; bit 32 marks motion.
+    let button = this.mouseButtonsPressed === 0 ? 35 : 32;
     if (this.mouseButtonsPressed & 1)
       button += 0; // Left
     else if (this.mouseButtonsPressed & 2)
