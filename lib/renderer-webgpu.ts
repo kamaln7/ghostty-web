@@ -215,7 +215,7 @@ fn fsMain(in: VOut) -> @location(0) vec4<f32> {
 
   if (textPass == 3u && (flags & FLAG_IS_CURSOR_CELL) == 0u) { discard; }
   if (textPass == 1u) {
-    let defaultBg = select((flags & FLAG_USE_THEME_BG) != 0u, (flags & FLAG_USE_THEME_FG) != 0u, (flags & FLAG_INVERSE) != 0u);
+    let defaultBg = (flags & FLAG_INVERSE) == 0u && (flags & FLAG_USE_THEME_BG) != 0u;
     if (defaultBg && (flags & (FLAG_IS_SELECTED | FLAG_IS_CURSOR_CELL)) == 0u) { discard; }
     return vec4<f32>(bg, 1.0);
   }
@@ -506,9 +506,10 @@ class GlyphAtlas extends GlyphAtlasBase {
     cellW: number,
     cellH: number,
     fontSize: number,
-    fontFamily: string
+    fontFamily: string,
+    dpr = 1
   ) {
-    super(cellW, cellH, fontSize, fontFamily);
+    super(cellW, cellH, fontSize, fontFamily, dpr);
     this.device = device;
     this.texture = this.createBackingTexture(this.size);
   }
@@ -1000,10 +1001,17 @@ export class WebGPURenderer implements Renderer {
         this.metrics.width,
         this.metrics.height,
         this.fontSize,
-        this.fontFamily
+        this.fontFamily,
+        this.dpr
       );
     } else {
-      this.atlas.reset(this.metrics.width, this.metrics.height, this.fontSize, this.fontFamily);
+      this.atlas.reset(
+        this.metrics.width,
+        this.metrics.height,
+        this.fontSize,
+        this.fontFamily,
+        this.dpr
+      );
     }
 
     if (!this.kittyAtlas) {
@@ -1281,7 +1289,13 @@ export class WebGPURenderer implements Renderer {
   setFontSize(size: number): void {
     this.fontSize = size;
     this.metrics = this.measureFont();
-    this.atlas?.reset(this.metrics.width, this.metrics.height, this.fontSize, this.fontFamily);
+    this.atlas?.reset(
+      this.metrics.width,
+      this.metrics.height,
+      this.fontSize,
+      this.fontFamily,
+      this.dpr
+    );
     this.rebuildBindGroup();
     this.invalidateNext = true;
     this.onRequestRender?.();
@@ -1290,7 +1304,13 @@ export class WebGPURenderer implements Renderer {
   setFontFamily(family: string): void {
     this.fontFamily = family;
     this.metrics = this.measureFont();
-    this.atlas?.reset(this.metrics.width, this.metrics.height, this.fontSize, this.fontFamily);
+    this.atlas?.reset(
+      this.metrics.width,
+      this.metrics.height,
+      this.fontSize,
+      this.fontFamily,
+      this.dpr
+    );
     this.rebuildBindGroup();
     this.invalidateNext = true;
     this.onRequestRender?.();
@@ -1342,7 +1362,13 @@ export class WebGPURenderer implements Renderer {
   remeasureFont(): void {
     this.dpr = window.devicePixelRatio || 1;
     this.metrics = this.measureFont();
-    this.atlas?.reset(this.metrics.width, this.metrics.height, this.fontSize, this.fontFamily);
+    this.atlas?.reset(
+      this.metrics.width,
+      this.metrics.height,
+      this.fontSize,
+      this.fontFamily,
+      this.dpr
+    );
     this.invalidateNext = true;
   }
 

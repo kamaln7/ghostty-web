@@ -157,7 +157,7 @@ void main() {
   if ((flags & FLAG_IS_CURSOR_CELL) != 0u) { bg = pal.cursorBg.rgb; fg = pal.cursorFg.rgb; }
   if (uTextPass == 3 && (flags & FLAG_IS_CURSOR_CELL) == 0u) discard;
   if (uTextPass == 1) {
-    bool defaultBg = (flags & FLAG_INVERSE) != 0u ? (flags & FLAG_USE_THEME_FG) != 0u : (flags & FLAG_USE_THEME_BG) != 0u;
+    bool defaultBg = (flags & FLAG_INVERSE) == 0u && (flags & FLAG_USE_THEME_BG) != 0u;
     if (defaultBg && (flags & (FLAG_IS_SELECTED | FLAG_IS_CURSOR_CELL)) == 0u) discard;
     fragColor = vec4(bg, 1.0); return;
   }
@@ -300,9 +300,10 @@ export class GLGlyphAtlas extends GlyphAtlasBase {
     cellW: number,
     cellH: number,
     fontSize: number,
-    fontFamily: string
+    fontFamily: string,
+    dpr = 1
   ) {
-    super(cellW, cellH, fontSize, fontFamily);
+    super(cellW, cellH, fontSize, fontFamily, dpr);
     this.gl = gl;
     const tex = this.createBackingTexture(this.size);
     if (!tex) throw new Error('GLGlyphAtlas: createTexture failed');
@@ -735,10 +736,17 @@ export class WebGL2Renderer implements Renderer {
         this.metrics.width,
         this.metrics.height,
         this.fontSize,
-        this.fontFamily
+        this.fontFamily,
+        this.dpr
       );
     } else {
-      this.atlas.reset(this.metrics.width, this.metrics.height, this.fontSize, this.fontFamily);
+      this.atlas.reset(
+        this.metrics.width,
+        this.metrics.height,
+        this.fontSize,
+        this.fontFamily,
+        this.dpr
+      );
     }
 
     if (!this.kittyAtlas) {
@@ -1015,7 +1023,13 @@ export class WebGL2Renderer implements Renderer {
   setFontSize(size: number): void {
     this.fontSize = size;
     this.metrics = this.measureFont();
-    this.atlas?.reset(this.metrics.width, this.metrics.height, this.fontSize, this.fontFamily);
+    this.atlas?.reset(
+      this.metrics.width,
+      this.metrics.height,
+      this.fontSize,
+      this.fontFamily,
+      this.dpr
+    );
     this.invalidateNext = true;
     this.onRequestRender?.();
   }
@@ -1023,7 +1037,13 @@ export class WebGL2Renderer implements Renderer {
   setFontFamily(family: string): void {
     this.fontFamily = family;
     this.metrics = this.measureFont();
-    this.atlas?.reset(this.metrics.width, this.metrics.height, this.fontSize, this.fontFamily);
+    this.atlas?.reset(
+      this.metrics.width,
+      this.metrics.height,
+      this.fontSize,
+      this.fontFamily,
+      this.dpr
+    );
     this.invalidateNext = true;
     this.onRequestRender?.();
   }
@@ -1074,7 +1094,13 @@ export class WebGL2Renderer implements Renderer {
   remeasureFont(): void {
     this.dpr = window.devicePixelRatio || 1;
     this.metrics = this.measureFont();
-    this.atlas?.reset(this.metrics.width, this.metrics.height, this.fontSize, this.fontFamily);
+    this.atlas?.reset(
+      this.metrics.width,
+      this.metrics.height,
+      this.fontSize,
+      this.fontFamily,
+      this.dpr
+    );
     this.invalidateNext = true;
   }
 
